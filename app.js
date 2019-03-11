@@ -9,15 +9,15 @@ const redis = require('redis');
 const mongoose = require('mongoose');
 const Data = require('./data.js'); //data model
 
-//RabbitMQ for messaging queue
-const RabbitMQ = require('rabbitmq-node');
-const rabbitmq = new RabbitMQ('amqp://localhost');
-rabbitmq.subscribe('newChannel');
-
 const app = express();
 
 //Redis Connection
 const client = redis.createClient();
+const sub = redis.createClient();
+const pub = redis.createClient();
+
+//Subscribing to the channel
+sub.subscribe("channel");
 
 //Mongoose Connection
 mongoose.connect('mongodb://localhost/mnr');
@@ -26,8 +26,6 @@ mongoose.connect('mongodb://localhost/mnr');
 app.set('views', path.join(__dirname, 'views'));
 app.set('view engine', 'ejs');
 
-// uncomment after placing your favicon in /public
-//app.use(favicon(path.join(__dirname, 'public', 'favicon.ico')));
 app.use(logger('dev'));
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: false }));
@@ -44,25 +42,24 @@ client.on('error', function (err) {
   console.log('Something went wrong ' + err);
 });
 
-//Execute if we recieve a message
-rabbitmq.on('message', function(channel, message) {
-  console.log(message);
-  //Read data from redis
-  client.get('data', function (error, data) {
-    if (error) {
-      console.log(error);
-    }
-    //create new instance of Data
-    let newData = new Data(JSON.parse(data));
-    //save data in mongoDB
-    newData.save().then(() => {
-      //Delete data from redis
-      client.del('data');
-      res.send(true);
-    }).catch((error) => {
-      console.log(error);
-    })
-  });
+//Will trigger if a message is received
+sub.on("message", function (channel, message) {
+    console.log("Message from channel: " + channel + "- " + message);
+    //Read data from redis
+    client.get('data', function (error, data) {
+      if (error) {
+        console.log(error);
+      }
+      //create new instance of Data
+      let newData = new Data(JSON.parse(data));
+      //save data in mongoDB
+      newData.save().then(() => {
+        //Delete data from redis
+        client.del('data');
+      }).catch((error) => {
+        console.log(error);
+      })
+    });
 });
 
 //Home Page
@@ -75,7 +72,8 @@ app.post('/postdata', (req, res) => {
   //Convert to string and save in redis
   client.set('data', JSON.stringify(req.body));
   //Publish a message
-  rabbitmq.publish('newChannel', {message: 'New Data arrived'});
+  pub.publish("channel", "New data arrived.");
+  res.send(true);
 })
 
 //Get route
