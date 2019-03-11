@@ -7,9 +7,16 @@ const cookieParser = require('cookie-parser');
 const bodyParser = require('body-parser');
 const redis = require('redis');
 const mongoose = require('mongoose');
-const Data = require('./data.js');
+const Data = require('./data.js'); //data model
+
+//RabbitMQ for messaging queue
+const RabbitMQ = require('rabbitmq-node');
+const rabbitmq = new RabbitMQ('amqp://localhost');
+rabbitmq.subscribe('newChannel');
 
 const app = express();
+
+//Redis Connection
 const client = redis.createClient();
 
 //Mongoose Connection
@@ -27,6 +34,8 @@ app.use(bodyParser.urlencoded({ extended: false }));
 app.use(cookieParser());
 app.use(express.static(path.join(__dirname, 'public')));
 
+
+//Redis Connection Check
 client.on('connect', function() {
   console.log('Redis client connected');
 });
@@ -35,27 +44,43 @@ client.on('error', function (err) {
   console.log('Something went wrong ' + err);
 });
 
-app.get('/', (req, res) => {
-  res.render('index.ejs');
-})
-
-app.post('/postdata', (req, res) => {
-  client.set('data', JSON.stringify(req.body));
+//Execute if we recieve a message
+rabbitmq.on('message', function(channel, message) {
+  console.log(message);
+  //Read data from redis
   client.get('data', function (error, data) {
     if (error) {
       console.log(error);
     }
+    //create new instance of Data
     let newData = new Data(JSON.parse(data));
+    //save data in mongoDB
     newData.save().then(() => {
+      //Delete data from redis
       client.del('data');
       res.send(true);
     }).catch((error) => {
       console.log(error);
     })
   });
+});
+
+//Home Page
+app.get('/', (req, res) => {
+  res.render('index.ejs');
 })
 
+//Post route
+app.post('/postdata', (req, res) => {
+  //Convert to string and save in redis
+  client.set('data', JSON.stringify(req.body));
+  //Publish a message
+  rabbitmq.publish('newChannel', {message: 'New Data arrived'});
+})
+
+//Get route
 app.get('/getdata', (req, res) => {
+  //Find all records in mongodb
   Data.find({}).then((data) => {
     res.json(data);
   }).catch((error) => {
